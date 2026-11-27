@@ -3288,7 +3288,7 @@ fn terrain_simplex_noise_4d(
     let circle_x = (world_geometry.width_m() as f32) / (std::f32::consts::TAU * wavelength_m);
     let linear_y = position_m.y / (std::f32::consts::SQRT_2 * wavelength_m);
     let point = [circle_x * cos_x, circle_x * sin_x, linear_y, linear_y + 0.5];
-    let (value, input_gradient) = simplex_noise_sample_4d(key, point);
+    let (value, input_gradient) = simplex_noise_sample_4d(key, point, [0; 4]);
     // The linear north-south slice needs this scale to retain the calibrated
     // broad-terrain occupancy: 114.3 gives the 3.54% land fraction the terrain
     // thresholds were tuned at, over seeds 10 + 7919 i for i < 40 on a 257 x 257
@@ -3331,7 +3331,7 @@ fn spatiotemporal_simplex_noise_4d(
         latitude_sign * position_m.y / wavelength_m + latitude_offset,
         time_coordinate + time_offset,
     ];
-    let (value, input_gradient) = simplex_noise_sample_4d(key, point);
+    let (value, input_gradient) = spatiotemporal_simplex_noise_sample_4d(key, point);
     (
         value,
         Vector::new(
@@ -3370,7 +3370,7 @@ fn spatiotemporal_pressure_noise_4d(
         latitude_sign * position_m.y / meridional_wavelength_m + latitude_offset,
         time_coordinate + time_offset,
     ];
-    let (value, input_gradient) = simplex_noise_sample_4d(key, point);
+    let (value, input_gradient) = spatiotemporal_simplex_noise_sample_4d(key, point);
     (
         value,
         Vector::new(
@@ -3383,9 +3383,39 @@ fn spatiotemporal_pressure_noise_4d(
     )
 }
 
-fn simplex_noise_sample_4d(key: u32, point: [f32; 4]) -> (f32, [f32; 4]) {
+const SIMPLEX_4D_UNSKEW: f32 = 0.138_196_6;
+
+/// `simplex_noise_sample_4d` at `point`, whose last coordinate is time.
+/// `spatiotemporal_simplex_domain_4d` in noise.wgsl mirrors it.
+fn spatiotemporal_simplex_noise_sample_4d(key: u32, point: [f32; 4]) -> (f32, [f32; 4]) {
+    // Translating by a lattice vertex leaves the noise unchanged. The vertex of
+    // skewed index (a, a, a, b), with a the floor of (√5 − 2)b, lies within a
+    // unit along each axis of (0, 0, 0, (3 − √5)b), so b the floor of the time
+    // over 3 − √5 keeps every translated coordinate small. At a large time, f32
+    // would otherwise round each cell's origin by a different fraction of the
+    // time's ulp and step the noise's gradient at every cell face; the
+    // translation's own rounding is the same at every position.
+    let b = libm::floorf(1.309_017 * point[3]);
+    let a = libm::floorf(0.236_068 * b);
+    let unskew = (3.0 * a + b) * SIMPLEX_4D_UNSKEW;
+    let space_shift = a - unskew;
+    simplex_noise_sample_4d(
+        key,
+        [
+            point[0] - space_shift,
+            point[1] - space_shift,
+            point[2] - space_shift,
+            point[3] - b + unskew,
+        ],
+        [a as i32, a as i32, a as i32, b as i32],
+    )
+}
+
+/// Simplex noise at `point` of the lattice translated by `lattice_shift`, in
+/// skewed lattice indices.
+fn simplex_noise_sample_4d(key: u32, point: [f32; 4], lattice_shift: [i32; 4]) -> (f32, [f32; 4]) {
     const SKEW: f32 = 0.309_017;
-    const UNSKEW: f32 = 0.138_196_6;
+    const UNSKEW: f32 = SIMPLEX_4D_UNSKEW;
     // Gives a slope RMS of 2.92 per input unit, which the wind and temperature
     // calibrations were fitted at, over 400 000 points uniform in a
     // 97 x 89 x 83 x 79 box with one seed per point. The 1% and 99% values are
@@ -3428,7 +3458,7 @@ fn simplex_noise_sample_4d(key: u32, point: [f32; 4]) -> (f32, [f32; 4]) {
         }
         let gradient = terrain_simplex_lattice_gradient_4d(
             key,
-            std::array::from_fn(|axis| lattice[axis] + offset_lattice[axis]),
+            std::array::from_fn(|axis| lattice[axis] + offset_lattice[axis] + lattice_shift[axis]),
         );
         let ramp = (0..4)
             .map(|axis| gradient[axis] * offset[axis])
@@ -4506,9 +4536,9 @@ mod tests {
             let point = |index: u32| {
                 std::array::from_fn(|axis| start[axis] + direction[axis] * step * index as f32)
             };
-            let mut previous = simplex_noise_sample_4d(seed, point(0));
+            let mut previous = simplex_noise_sample_4d(seed, point(0), [0; 4]);
             for index in 1..20_000 {
-                let sample = simplex_noise_sample_4d(seed, point(index));
+                let sample = simplex_noise_sample_4d(seed, point(index), [0; 4]);
                 let slope = (0..4)
                     .map(|axis| direction[axis] * (sample.1[axis] + previous.1[axis]) / 2.0)
                     .sum::<f32>();

@@ -343,9 +343,26 @@ fn simplex_noise_domain_4d(point: vec4<f32>) -> Simplex4dDomain {
     return Simplex4dDomain(lattice_products, first, rank);
 }
 
-fn simplex_noise_sample_4d(key: u32, point: vec4<f32>) -> Simplex4dSample {
+// The domain of a point whose last coordinate is time. Mirrors
+// `spatiotemporal_simplex_noise_sample_4d` in crates/game/src/lib.rs, which
+// records why it translates the lattice.
+fn spatiotemporal_simplex_domain_4d(point: vec4<f32>) -> Simplex4dDomain {
+    let b = floor(1.309017 * point.w);
+    let a = floor(0.236068 * b);
+    let unskew = (3.0 * a + b) * 0.1381966;
+    var domain = simplex_noise_domain_4d(
+        vec4<f32>(point.xyz - vec3<f32>(a - unskew), point.w - b + unskew),
+    );
+    let lattice_shift = vec4<i32>(i32(a), i32(a), i32(a), i32(b));
+    for (var axis = 0u; axis < 4u; axis++) {
+        domain.lattice_products[axis] +=
+            bitcast<u32>(lattice_shift[axis]) * LATTICE_KEY_MULTIPLIERS[axis];
+    }
+    return domain;
+}
+
+fn simplex_noise_sample_4d(key: u32, domain: Simplex4dDomain) -> Simplex4dSample {
     let unskew_factor = 0.1381966;
-    let domain = simplex_noise_domain_4d(point);
     var sample: Simplex4dSample;
     sample.value = 0.0;
     sample.gradient = vec4<f32>(0.0);
@@ -387,9 +404,8 @@ fn simplex_noise_sample_4d(key: u32, point: vec4<f32>) -> Simplex4dSample {
     return sample;
 }
 
-fn simplex_noise_value_4d(key: u32, point: vec4<f32>) -> f32 {
+fn simplex_noise_value_4d(key: u32, domain: Simplex4dDomain) -> f32 {
     let unskew_factor = 0.1381966;
-    let domain = simplex_noise_domain_4d(point);
     var value = 0.0;
     for (var vertex = 0i; vertex < 5i; vertex++) {
         let threshold = 4i - vertex;
@@ -425,12 +441,12 @@ fn terrain_simplex_noise_4d_from_circle(
 ) -> TerrainNoiseSample {
     let circle_radius = scene.world_size_m.x / (TAU * wavelength_m);
     let linear_y = circle_position.z / (sqrt(2.0) * wavelength_m);
-    let simplex = simplex_noise_sample_4d(key, vec4<f32>(
+    let simplex = simplex_noise_sample_4d(key, simplex_noise_domain_4d(vec4<f32>(
         circle_radius * circle_position.x,
         circle_radius * circle_position.y,
         linear_y,
         linear_y + 0.5,
-    ));
+    )));
     // Keep synchronized with `terrain_simplex_noise_4d` in crates/game/src/lib.rs,
     // which records its calibration.
     let cylindrical_scale = 114.3 / 83.1;
@@ -451,12 +467,12 @@ fn terrain_simplex_noise_value_4d_from_circle(
 ) -> f32 {
     let circle_radius = scene.world_size_m.x / (TAU * wavelength_m);
     let linear_y = circle_position.z / (sqrt(2.0) * wavelength_m);
-    return (114.3 / 83.1) * simplex_noise_value_4d(key, vec4<f32>(
+    return (114.3 / 83.1) * simplex_noise_value_4d(key, simplex_noise_domain_4d(vec4<f32>(
         circle_radius * circle_position.x,
         circle_radius * circle_position.y,
         linear_y,
         linear_y + 0.5,
-    ));
+    )));
 }
 
 fn terrain_simplex_noise_4d(

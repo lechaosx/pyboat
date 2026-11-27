@@ -1,9 +1,9 @@
 use game::{
     celestial_orbit, cloud_field_time_coordinates, current_air_temperature_c, dinghy_parameters,
-    procedural_match_environment, procedural_world_environment, scalar_field_time_coordinates,
-    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates,
-    vector_field_time_coordinates_interpolated, world_celestial_conditions,
-    world_climate_conditions,
+    procedural_atmosphere_primary, procedural_match_environment, procedural_world_environment,
+    scalar_field_time_coordinates, scalar_field_time_coordinates_interpolated,
+    vector_field_time_coordinates, vector_field_time_coordinates_interpolated,
+    world_celestial_conditions, world_climate_conditions,
 };
 use physics::glamx::Vec2 as Vector;
 use simulation::{TICKS_PER_SECOND, WorldGeometry};
@@ -287,6 +287,43 @@ fn world_environment_is_deterministic_and_locally_continuous() {
     let expected =
         world_celestial_conditions(world, TICK as f64 / TICKS_PER_SECOND as f64, position);
     assert_eq!(sample.celestial, expected);
+}
+
+/// The resolved surface wind's convergence, which lifts air into low cloud and
+/// rain, changes smoothly at large noise time coordinates: between points a
+/// metre apart it changes by little of its range over three hundred.
+#[test]
+fn surface_wind_convergence_changes_smoothly_along_a_line() {
+    let world = WorldGeometry::default();
+    for case in 0..24_u64 {
+        let seed = 0x5eed_cafe_dead_beef_u64.wrapping_add(case * 0x9e37_79b9);
+        let tick = case * 9_876_543;
+        let start_m = Vector::new(
+            -30_000.0 + 2_500.0 * case as f32,
+            14_000.0 - 1_000.0 * case as f32,
+        );
+        let convergence_per_s: Vec<f32> = (0..=300)
+            .map(|metre| {
+                procedural_atmosphere_primary(
+                    world,
+                    seed,
+                    tick,
+                    start_m + Vector::new(metre as f32, 0.0),
+                )
+                .surface_wind_convergence_per_s
+            })
+            .collect();
+        let range_per_s = convergence_per_s.iter().copied().fold(f32::MIN, f32::max)
+            - convergence_per_s.iter().copied().fold(f32::MAX, f32::min);
+        let largest_step_per_s = convergence_per_s
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0, f32::max);
+        assert!(
+            largest_step_per_s < 0.1 * range_per_s,
+            "case {case}: a {largest_step_per_s}/s step within a {range_per_s}/s range"
+        );
+    }
 }
 
 #[test]

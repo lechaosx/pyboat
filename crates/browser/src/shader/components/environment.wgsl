@@ -92,7 +92,7 @@ fn spatiotemporal_noise_sample(
         wavelength_m,
         time_coordinate,
     );
-    let simplex = simplex_noise_sample_4d(key, domain.point);
+    let simplex = simplex_noise_sample_4d(key, spatiotemporal_simplex_domain_4d(domain.point));
     return TerrainNoiseSample(
         simplex.value,
         vec2<f32>(
@@ -115,7 +115,7 @@ fn spatiotemporal_noise_value(
         wavelength_m,
         time_coordinate,
     );
-    return simplex_noise_value_4d(key, domain.point);
+    return simplex_noise_value_4d(key, spatiotemporal_simplex_domain_4d(domain.point));
 }
 
 fn spatiotemporal_pressure_noise_sample(
@@ -141,12 +141,12 @@ fn spatiotemporal_pressure_noise_sample(
         -circle_radius * zonal_aspect_gradient_per_m / zonal_aspect;
     let simplex = simplex_noise_sample_4d(
         key,
-        vec4<f32>(
+        spatiotemporal_simplex_domain_4d(vec4<f32>(
             circle_radius * cos(longitude),
             circle_radius * sin(longitude),
             latitude_sign * position_m.y / meridional_wavelength_m + latitude_offset,
             time_coordinate + time_offset,
-        ),
+        )),
     );
     return TerrainNoiseSample(
         simplex.value,
