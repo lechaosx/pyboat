@@ -1457,6 +1457,19 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 26.0)],
         ),
+        // Deep water's colour under an eye settled to a lightning flash 14
+        // times daylight.
+        "lighting_flash_vision_ramp" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[
+                ("LIGHTING_MODEL_REGRESSION_OUTPUT", 36.0),
+                ("LIGHTING_MODEL_ADAPTING_LIGHT", 14.0),
+                ("LIGHTING_MODEL_VISION_RED", 0.05),
+                ("LIGHTING_MODEL_VISION_GREEN", 0.08),
+                ("LIGHTING_MODEL_VISION_BLUE", 0.13),
+            ],
+        ),
         name if name.starts_with("lighting_shadow_darkness_") => {
             let (light_height, cloud_depth) = name["lighting_shadow_darkness_".len()..]
                 .split_once('_')

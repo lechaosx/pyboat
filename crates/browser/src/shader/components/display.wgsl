@@ -186,8 +186,24 @@ fn eye_color_response(linear_color: vec3<f32>, adaptation: EyeAdaptation) -> vec
     // The exact local display derivative preserves the daylight palette.
     let receptor_white = SRGB_TO_CAT16 * vec3<f32>(1.0);
     let receptors = (SRGB_TO_CAT16 * cone_color) / (luminance * receptor_white);
-    var vision_color = CAT16_TO_SRGB * (receptor_white
-        * pow(receptors, vec3<f32>(scene_slope / display_slope)))
+    // Just above the display's black under light brighter than daylight, the
+    // virtual observer's response flattens, so the derivative grows without
+    // bound and asks for more chroma than the display's gamut holds. A color
+    // that would need negative light mixes toward the grey of the display
+    // luminance until its weakest primary reaches zero, which moves its
+    // luminance toward that grey's. Compromise: the exponent still diverges,
+    // so colors near the eye's black show as the most saturated in-gamut
+    // color of their strongest receptor, dimmed to the display luminance,
+    // where chroma should fade toward threshold as the Hunt effect has it;
+    // the gamut bound only limits that artefact. Powers of the receptors
+    // relative to the strongest, and the reciprocal power of the strongest,
+    // stay finite where the derivative is large.
+    let exponent = scene_slope / display_slope;
+    let strongest = max(receptors.x, max(receptors.y, receptors.z));
+    let hue = CAT16_TO_SRGB * (receptor_white * pow(receptors / strongest, vec3<f32>(exponent)));
+    let scale = pow(strongest, -exponent);
+    let deficit = min(min(hue.r, min(hue.g, hue.b)), 0.0);
+    var vision_color = (hue - deficit) / (scale - deficit)
         * (display_luminance / SCENE_LUMINANCE_CD_M2);
     if VISION_INTERMEDIATE {
         // The shared linear intermediate has half-float range. Its gamut

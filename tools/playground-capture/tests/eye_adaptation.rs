@@ -249,6 +249,32 @@ fn display_response_is_monotone_hue_preserving_and_shares_sdr_below_the_shoulder
     assert!(hdr[width - 1][0] >= linear_channel_byte(0.95));
 }
 
+/// An eye settled to a lightning flash far brighter than daylight sees dim
+/// surfaces as black. Along a ramp of one colour rising from that black, the
+/// displayed luminance never falls, so no dimmer surface shows brighter.
+#[test]
+fn displayed_luminance_rises_from_black_under_a_flash() {
+    let ramp = capture(
+        "flash-ramp",
+        &[
+            "--diagnostic",
+            "lighting_flash_vision_ramp",
+            "--width",
+            "256",
+            "--height",
+            "1",
+        ],
+    );
+    let shown = luminances(&ramp.rgba);
+    assert_eq!(shown[0], 0.0, "the ramp starts above the eye's black");
+    for (column, pair) in shown.windows(2).enumerate() {
+        assert!(
+            pair[1] >= pair[0],
+            "luminance falls after column {column}: {pair:?}",
+        );
+    }
+}
+
 /// A deck filling the view darkens the light falling on it about sixfold, and
 /// the eye adapts to that light. The lab's cloud-shadow switch clears the
 /// deck's shadows from the field grids the eye adapts through, so a matte grey

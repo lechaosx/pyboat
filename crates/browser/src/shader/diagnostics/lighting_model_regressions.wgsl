@@ -12,6 +12,7 @@ override LIGHTING_MODEL_SLOPE_DEGREES: f32 = 30.0;
 override LIGHTING_MODEL_SUN_DEGREES: f32 = 30.0;
 override LIGHTING_MODEL_VIEW_DEGREES: f32 = 0.0;
 override LIGHTING_MODEL_SEDIMENT: f32 = 0.0;
+override LIGHTING_MODEL_ADAPTING_LIGHT: f32 = 1.0;
 
 // Vision regressions show their reference response at this linear level: the
 // centre of 8-bit sRGB level 138, away from rounding boundaries, with room
@@ -93,6 +94,19 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         let level = exp2(mix(-6.0, 6.0, input.css_position_px.x / css_view_width_px));
         let color = vec3<f32>(LIGHTING_MODEL_VISION_RED, LIGHTING_MODEL_VISION_GREEN, LIGHTING_MODEL_VISION_BLUE);
         return vec4<f32>(0.25 * tone_map_exposed_color(level * color), 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 36u {
+        // The displayed light of the vision colour along a horizontal ramp
+        // from 1/128 to 4 times the light of an eye settled to
+        // LIGHTING_MODEL_ADAPTING_LIGHT.
+        let css_view_width_px = scene.css_view_height_px_and_padding.x
+            * scene.camera_and_view_m.z / scene.camera_and_view_m.w;
+        let level = exp2(mix(-7.0, 2.0, input.css_position_px.x / css_view_width_px));
+        let color = vec3<f32>(LIGHTING_MODEL_VISION_RED, LIGHTING_MODEL_VISION_GREEN, LIGHTING_MODEL_VISION_BLUE);
+        let adaptation = steady_adaptation(LIGHTING_MODEL_ADAPTING_LIGHT, vec3<f32>(1.0));
+        return vec4<f32>(tone_map_scene_color(
+            level * LIGHTING_MODEL_ADAPTING_LIGHT * color, adaptation, input.css_position_px,
+        ), 1.0);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 24u {
         return diagnostic_shadow_darkness(LIGHTING_MODEL_LIGHT_HEIGHT, LIGHTING_MODEL_CLOUD_DEPTH);
