@@ -221,7 +221,7 @@ fn demo_clamps_and_applies_player_motion_intent() {
 fn demo_maps_keyboard_and_world_relative_motion() {
     let mut demo = Demo::new();
 
-    demo.set_player_input(1.0, -1.0, 0.0, 1.0);
+    demo.set_player_input(0.0, 0.0, 0.0, 1.0);
     let gamepad = demo.motion_intent();
     assert!((gamepad.forward - 1.0).abs() < 1.0e-5);
     assert!((gamepad.turn + 1.0).abs() < 1.0e-5);
@@ -235,10 +235,29 @@ fn demo_maps_keyboard_and_world_relative_motion() {
         }
     );
 
-    demo.set_player_input(1.0, -1.0, 0.1, 0.1);
+    demo.set_player_input(0.0, 0.0, 0.1, 0.1);
     let small_gamepad = demo.motion_intent();
     let mapped_magnitude = small_gamepad.forward.abs().max(small_gamepad.turn.abs());
     assert!((mapped_magnitude - 0.02_f64.sqrt()).abs() < 1.0e-5);
+}
+
+#[test]
+fn demo_combines_keyboard_with_world_steering_in_boat_coordinates() {
+    let mut demo = Demo::new();
+
+    demo.set_player_input(1.0, 0.0, 0.0, -0.5);
+    let intent = demo.motion_intent();
+    assert!((intent.forward - 0.5).abs() < 1.0e-5, "{intent:?}");
+    assert!((intent.turn - 0.5).abs() < 1.0e-5, "{intent:?}");
+
+    demo.set_player_input(1.0, 1.0, 0.0, 2.0);
+    assert_eq!(
+        demo.motion_intent(),
+        MotionIntent {
+            forward: 1.0,
+            turn: 0.0,
+        }
+    );
 }
 
 #[test]

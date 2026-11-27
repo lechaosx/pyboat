@@ -1301,10 +1301,8 @@ pub fn player_motion_intent(
     world_x: f32,
     world_y: f32,
 ) -> MotionIntent {
-    let mut intent = MotionIntent {
-        forward: f64::from(keyboard_forward.clamp(-1.0, 1.0)),
-        turn: f64::from(keyboard_turn.clamp(-1.0, 1.0)),
-    };
+    let mut forward = keyboard_forward.clamp(-1.0, 1.0);
+    let mut turn = keyboard_turn.clamp(-1.0, 1.0);
     let world_motion = PhysicsVector::new(f64::from(world_x), f64::from(world_y));
     let length = world_motion.length();
     let magnitude = length.min(1.0);
@@ -1314,12 +1312,13 @@ pub fn player_motion_intent(
         let local_direction =
             PhysicsRotation::new(-angle_rad).transform_vector(world_motion / length);
         let square_scale = local_direction.x.abs().max(local_direction.y.abs());
-        intent.forward = f64::from((local_direction.x / square_scale * magnitude) as f32);
-        intent.turn = f64::from((local_direction.y / square_scale * magnitude) as f32);
-        intent.forward = intent.forward.clamp(-1.0, 1.0);
-        intent.turn = intent.turn.clamp(-1.0, 1.0);
+        forward += (local_direction.x / square_scale * magnitude) as f32;
+        turn += (local_direction.y / square_scale * magnitude) as f32;
     }
-    intent
+    MotionIntent {
+        forward: f64::from(forward.clamp(-1.0, 1.0)),
+        turn: f64::from(turn.clamp(-1.0, 1.0)),
+    }
 }
 
 pub struct Demo {
@@ -1630,7 +1629,7 @@ mod tests {
             removed_player_ids: Vec::new(),
             impacts: Vec::new(),
         });
-        client.set_player_input(0.0, 0.0, 0.31, -0.47);
+        client.set_player_input(0.12, -0.21, 0.31, -0.47);
         let messages = client.take_inputs(TICK_SECONDS);
         let [ClientMessage::Input { forward, turn, .. }] = messages.as_slice() else {
             panic!("one fixed tick must emit one input");

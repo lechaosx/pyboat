@@ -13,9 +13,11 @@ test("pointer drag saturates at the unit disk while preserving direction", () =>
   assert.deepEqual(pointerVector(-2, 0), [-1, 0]);
 });
 
-test("any active gamepad vector wins; a neutral or absent pad leaves pointer steering", () => {
-  assert.deepEqual(worldSteering([0.0001, 0], [0.5, 0.5]), [0.0001, 0]);
-  assert.deepEqual(worldSteering([0, -0.5], [0.5, 0.5]), [0, 0.5]);
+test("gamepad and pointer add in world coordinates even with a small stick input", () => {
+  assert.deepEqual(worldSteering([0.0001, 0], [0.5, 0.5]), [0.5001, 0.5]);
+  assert.deepEqual(worldSteering([0, -0.5], [0.5, 0.5]), [0.5, 1]);
+  assert.deepEqual(worldSteering([0.5, 0.5], [-0.5, 0.5]), [0, 0]);
+  assert.deepEqual(worldSteering([0.0001, 0], [0, 0]), [0.0001, 0]);
   assert.deepEqual(worldSteering([0, 0], [0.5, 0.5]), [0.5, 0.5]);
-  assert.deepEqual(worldSteering(undefined, [0, 0]), [0, 0]);
+  assert.deepEqual(worldSteering(undefined, [0.5, 0.5]), [0.5, 0.5]);
 });

@@ -143,8 +143,8 @@ export class DrivingBoat {
   step(): void {
     if (!this.driver) return;
     const pads = document.hasFocus() && document.visibilityState === "visible" ? navigator.getGamepads?.() : []; const pad = Array.from(pads ?? []).find((pad) => pad && pad.connected && pad.axes.length >= 2);
-    let x = pad?.axes[0] ?? 0; let y = -(pad?.axes[1] ?? 0);
-    if (x === 0 && y === 0) { x = this.pointer?.dx ?? 0; y = this.pointer?.dy ?? 0; }
+    const x = (this.pointer?.dx ?? 0) + (pad?.axes[0] ?? 0);
+    const y = (this.pointer?.dy ?? 0) - (pad?.axes[1] ?? 0);
     this.driver.step(Number(this.keys.has("KeyW")) - Number(this.keys.has("KeyS")), Number(this.keys.has("KeyA")) - Number(this.keys.has("KeyD")), x, y);
     if (this.world) this.world = { ...this.world, tick: this.world.tick + 1n };
   }

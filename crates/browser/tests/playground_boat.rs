@@ -38,7 +38,7 @@ fn world_rebase_preserves_physical_state() {
 fn every_tick_uses_production_environment_and_current_heading_intent() {
     let geometry = WorldGeometry::default();
     let mut boat = PlaygroundBoat::spawn(geometry, 7, 3600, Vector::ZERO).unwrap();
-    let input = [0.0, 0.0, 0.25, 0.4];
+    let input = [1.0, 0.0, 0.25, 0.4];
     boat.set_player_input(input);
     let mut reference = SharedSimulation::new_with_world_geometry(geometry);
     reference.add_boat(dinghy_parameters(), boat.motion());

@@ -7,7 +7,5 @@ export function worldSteering(
   gamepadAxes: readonly number[] | undefined,
   pointer: [number, number],
 ): [number, number] {
-  const x = gamepadAxes?.[0] ?? 0;
-  const y = -(gamepadAxes?.[1] ?? 0);
-  return x === 0 && y === 0 ? pointer : [x, y === 0 ? 0 : y];
+  return [pointer[0] + (gamepadAxes?.[0] ?? 0), pointer[1] - (gamepadAxes?.[1] ?? 0)];
 }
