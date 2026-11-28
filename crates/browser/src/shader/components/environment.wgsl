@@ -910,22 +910,43 @@ fn upper_air_temperature_500_hpa_field_from_noise(
 // the two synchronized.
 fn saturation_vapor_pressure_coefficients(air_temperature_c: f32) -> vec3<f32> {
     if air_temperature_c >= 0.0 {
-        return vec3<f32>(6.1094, 17.625, 243.04);
+        return WATER_MAGNUS_COEFFICIENTS;
     }
-    return vec3<f32>(6.1121, 22.587, 273.86);
+    return ICE_MAGNUS_COEFFICIENTS;
 }
 
-fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32, pressure_hpa: f32) -> f32 {
-    let coefficients = saturation_vapor_pressure_coefficients(air_temperature_c);
-    let vapor_pressure_hpa = coefficients.x
+const WATER_MAGNUS_COEFFICIENTS: vec3<f32> = vec3<f32>(6.1094, 17.625, 243.04);
+const ICE_MAGNUS_COEFFICIENTS: vec3<f32> = vec3<f32>(6.1121, 22.587, 273.86);
+
+fn magnus_vapor_pressure_hpa(coefficients: vec3<f32>, air_temperature_c: f32) -> f32 {
+    return coefficients.x
         * exp(coefficients.y * air_temperature_c / (coefficients.z + air_temperature_c));
+}
+
+fn magnus_growth_per_c(coefficients: vec3<f32>, air_temperature_c: f32) -> f32 {
+    let offset_c = coefficients.z + air_temperature_c;
+    return coefficients.y * coefficients.z / (offset_c * offset_c);
+}
+
+fn specific_humidity_g_kg(vapor_pressure_hpa: f32, pressure_hpa: f32) -> f32 {
     return 622.0 * vapor_pressure_hpa / (pressure_hpa - 0.378 * vapor_pressure_hpa);
 }
 
+fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32, pressure_hpa: f32) -> f32 {
+    return specific_humidity_g_kg(
+        magnus_vapor_pressure_hpa(
+            saturation_vapor_pressure_coefficients(air_temperature_c),
+            air_temperature_c,
+        ),
+        pressure_hpa,
+    );
+}
+
 fn saturation_growth_per_c(air_temperature_c: f32) -> f32 {
-    let coefficients = saturation_vapor_pressure_coefficients(air_temperature_c);
-    let offset_c = coefficients.z + air_temperature_c;
-    return coefficients.y * coefficients.z / (offset_c * offset_c);
+    return magnus_growth_per_c(
+        saturation_vapor_pressure_coefficients(air_temperature_c),
+        air_temperature_c,
+    );
 }
 
 fn dew_point_c(air_temperature_c: f32, relative_humidity: f32) -> f32 {

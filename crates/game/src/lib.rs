@@ -1338,24 +1338,48 @@ fn water_freezing_potential(effective_water_temperature_c: f32) -> f32 {
 /// whose saturation ECMWF's IFS blends between the two (up to 3.4% higher).
 fn saturation_vapor_pressure_coefficients(air_temperature_c: f32) -> (f32, f32, f32) {
     if air_temperature_c >= 0.0 {
-        (6.1094, 17.625, 243.04)
+        WATER_MAGNUS_COEFFICIENTS
     } else {
-        (6.1121, 22.587, 273.86)
+        ICE_MAGNUS_COEFFICIENTS
     }
 }
 
-/// Saturation specific humidity, ε·e_s / (p − (1 − ε)·e_s) with ε = 0.622.
-fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32, pressure_hpa: f32) -> f32 {
-    let (base_hpa, growth, offset_c) = saturation_vapor_pressure_coefficients(air_temperature_c);
-    let vapor_pressure_hpa =
-        base_hpa * libm::expf(growth * air_temperature_c / (offset_c + air_temperature_c));
+const WATER_MAGNUS_COEFFICIENTS: (f32, f32, f32) = (6.1094, 17.625, 243.04);
+const ICE_MAGNUS_COEFFICIENTS: (f32, f32, f32) = (6.1121, 22.587, 273.86);
+
+fn magnus_vapor_pressure_hpa(
+    (base_hpa, growth, offset_c): (f32, f32, f32),
+    air_temperature_c: f32,
+) -> f32 {
+    base_hpa * libm::expf(growth * air_temperature_c / (offset_c + air_temperature_c))
+}
+
+/// The Magnus saturation's fractional growth per degree, d ln e_s / dT.
+fn magnus_growth_per_c((_, growth, offset_c): (f32, f32, f32), air_temperature_c: f32) -> f32 {
+    growth * offset_c / ((offset_c + air_temperature_c) * (offset_c + air_temperature_c))
+}
+
+/// Specific humidity, ε·e / (p − (1 − ε)·e) with ε = 0.622.
+fn specific_humidity_g_kg(vapor_pressure_hpa: f32, pressure_hpa: f32) -> f32 {
     622.0 * vapor_pressure_hpa / (pressure_hpa - 0.378 * vapor_pressure_hpa)
+}
+
+fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32, pressure_hpa: f32) -> f32 {
+    specific_humidity_g_kg(
+        magnus_vapor_pressure_hpa(
+            saturation_vapor_pressure_coefficients(air_temperature_c),
+            air_temperature_c,
+        ),
+        pressure_hpa,
+    )
 }
 
 /// Saturation's fractional growth per degree, d ln e_s / dT.
 fn saturation_growth_per_c(air_temperature_c: f32) -> f32 {
-    let (_, growth, offset_c) = saturation_vapor_pressure_coefficients(air_temperature_c);
-    growth * offset_c / ((offset_c + air_temperature_c) * (offset_c + air_temperature_c))
+    magnus_growth_per_c(
+        saturation_vapor_pressure_coefficients(air_temperature_c),
+        air_temperature_c,
+    )
 }
 
 /// The temperature at which air holding `relative_humidity` of saturation
