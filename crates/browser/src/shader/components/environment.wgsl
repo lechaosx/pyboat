@@ -53,11 +53,11 @@ struct SpatiotemporalNoiseDomain {
     latitude_sign: f32,
 };
 
+// A point whose last coordinate is the key's time offset.
 fn spatiotemporal_noise_domain(
     key: u32,
     position_m: vec2<f32>,
     wavelength_m: f32,
-    time_coordinate: f32,
 ) -> SpatiotemporalNoiseDomain {
     let orientation = key;
     let longitude_offset = TAU * f32(orientation & 0xffu) / 256.0;
@@ -73,7 +73,7 @@ fn spatiotemporal_noise_domain(
             circle_radius * cos(longitude),
             circle_radius * sin(longitude),
             latitude_sign * position_m.y / wavelength_m + latitude_offset,
-            time_coordinate + time_offset,
+            time_offset,
         ),
         longitude,
         latitude_sign,
@@ -84,15 +84,13 @@ fn spatiotemporal_noise_sample(
     key: u32,
     position_m: vec2<f32>,
     wavelength_m: f32,
-    time_coordinate: f32,
+    time: NoiseTime,
 ) -> TerrainNoiseSample {
-    let domain = spatiotemporal_noise_domain(
+    let domain = spatiotemporal_noise_domain(key, position_m, wavelength_m);
+    let simplex = simplex_noise_sample_4d(
         key,
-        position_m,
-        wavelength_m,
-        time_coordinate,
+        spatiotemporal_simplex_domain_4d(domain.point, time),
     );
-    let simplex = simplex_noise_sample_4d(key, spatiotemporal_simplex_domain_4d(domain.point));
     return TerrainNoiseSample(
         simplex.value,
         vec2<f32>(
@@ -107,15 +105,10 @@ fn spatiotemporal_noise_value(
     key: u32,
     position_m: vec2<f32>,
     wavelength_m: f32,
-    time_coordinate: f32,
+    time: NoiseTime,
 ) -> f32 {
-    let domain = spatiotemporal_noise_domain(
-        key,
-        position_m,
-        wavelength_m,
-        time_coordinate,
-    );
-    return simplex_noise_value_4d(key, spatiotemporal_simplex_domain_4d(domain.point));
+    let domain = spatiotemporal_noise_domain(key, position_m, wavelength_m);
+    return simplex_noise_value_4d(key, spatiotemporal_simplex_domain_4d(domain.point, time));
 }
 
 fn spatiotemporal_pressure_noise_sample(
@@ -123,7 +116,7 @@ fn spatiotemporal_pressure_noise_sample(
     position_m: vec2<f32>,
     zonal_wavelength_m: f32,
     meridional_wavelength_m: f32,
-    time_coordinate: f32,
+    time: NoiseTime,
     zonal_aspect: f32,
     zonal_aspect_gradient_per_m: f32,
 ) -> TerrainNoiseSample {
@@ -141,12 +134,15 @@ fn spatiotemporal_pressure_noise_sample(
         -circle_radius * zonal_aspect_gradient_per_m / zonal_aspect;
     let simplex = simplex_noise_sample_4d(
         key,
-        spatiotemporal_simplex_domain_4d(vec4<f32>(
-            circle_radius * cos(longitude),
-            circle_radius * sin(longitude),
-            latitude_sign * position_m.y / meridional_wavelength_m + latitude_offset,
-            time_coordinate + time_offset,
-        )),
+        spatiotemporal_simplex_domain_4d(
+            vec4<f32>(
+                circle_radius * cos(longitude),
+                circle_radius * sin(longitude),
+                latitude_sign * position_m.y / meridional_wavelength_m + latitude_offset,
+                time_offset,
+            ),
+            time,
+        ),
     );
     return TerrainNoiseSample(
         simplex.value,
@@ -221,7 +217,7 @@ fn procedural_pressure_sample_filtered_bands(
             position_m,
             zonal_wavelength_m,
             meridional_wavelength_m,
-            scene.pressure_time_coordinate[band],
+            noise_time(scene.pressure_noise_times[band]),
             zonal_aspect,
             zonal_aspect_gradient_per_m,
         );
@@ -676,7 +672,7 @@ fn surface_air_temperature_anomaly_c_from_climate(
         SURFACE_AIR_TEMPERATURE_NOISE_FIELD,
         position_m,
         65536.0,
-        scene.scalar_field_time_coordinates.x,
+        noise_time(scene.scalar_field_noise_times[0]),
         4u,
         0.5,
     );
@@ -701,7 +697,7 @@ fn surface_air_temperature_anomaly_noise_at(position_m: vec2<f32>) -> FractalNoi
         SURFACE_AIR_TEMPERATURE_NOISE_FIELD,
         position_m,
         65536.0,
-        scene.scalar_field_time_coordinates.x,
+        noise_time(scene.scalar_field_noise_times[0]),
         4u,
         0.5,
     );
@@ -866,7 +862,7 @@ fn upper_air_temperature_500_hpa_noise_at(position_m: vec2<f32>) -> vec2<f32> {
         AIR_TEMPERATURE_500_HPA_NOISE_FIELD,
         position_m,
         65536.0,
-        scene.scalar_field_time_coordinates.y,
+        noise_time(scene.scalar_field_noise_times[1]),
         4u,
         0.5,
     );
@@ -1075,7 +1071,7 @@ fn surface_water_vapor_noise_at(position_m: vec2<f32>) -> vec2<f32> {
         WATER_VAPOR_NOISE_FIELD,
         position_m,
         8192.0,
-        scene.scalar_field_time_coordinates.z,
+        noise_time(scene.scalar_field_noise_times[2]),
         5u,
         0.5,
     );

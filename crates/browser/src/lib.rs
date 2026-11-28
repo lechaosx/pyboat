@@ -52,10 +52,10 @@ pub use terrain_cache::TerrainCachePass;
 pub use terrain_cache::{TerrainCache, TerrainCacheFrame};
 
 use game::{
-    CloudFieldTimeCoordinates, OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_DIRECTIONS, OceanWaveMode,
-    SeaComponents, WorldEnvironment, cloud_field_time_coordinates_interpolated, dinghy_parameters,
-    match_environment, procedural_match_environment, procedural_world_environment,
-    procedural_world_environment_interpolated, sailor_targets,
+    CloudFieldTimeCoordinates, NoiseTime, OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_DIRECTIONS,
+    OceanWaveMode, SeaComponents, WorldEnvironment, cloud_field_time_coordinates_interpolated,
+    dinghy_parameters, match_environment, procedural_match_environment,
+    procedural_world_environment, procedural_world_environment_interpolated, sailor_targets,
 };
 use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use rapier2d_f64::glamx::Vec2 as Vector;
@@ -370,6 +370,29 @@ pub fn seasonal_phase_factors(season_phase: f32) -> [f32; 4] {
         ground_angle.cos(),
         water_angle.sin(),
     ]
+}
+
+/// The noise time `coordinate` as noise.wgsl's `noise_time` reads it.
+pub fn noise_time_uniform(coordinate: f64) -> [u32; 4] {
+    let time = NoiseTime::new(coordinate);
+    [
+        time.lattice[0] as u32,
+        time.lattice[1] as u32,
+        time.space_shift.to_bits(),
+        time.time.to_bits(),
+    ]
+}
+
+/// The noise times of the first three octaves of cumulus, the deck, and
+/// cirrus at half the deck's time. Turbulent eddies turn over in a time that
+/// grows with their size to the 2/3 power, so each halving of the wavelength
+/// evolves 2^(2/3) times faster.
+pub fn cloud_noise_time_uniforms(time: CloudFieldTimeCoordinates) -> [[[u32; 4]; 3]; 3] {
+    [time.cumulus, time.upper, 0.5 * time.upper].map(|coordinate| {
+        std::array::from_fn(|octave| {
+            noise_time_uniform(coordinate * (2.0 * octave as f64 / 3.0).exp2())
+        })
+    })
 }
 
 pub const OCEAN_WAVE_BAND_ROTATION_ROWS: usize = OCEAN_WAVE_BAND_COUNT.div_ceil(4);

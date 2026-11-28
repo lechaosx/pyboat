@@ -389,21 +389,21 @@ pub struct WorldEnvironment {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalarFieldTimeCoordinates {
-    pub air_temperature: f32,
-    pub upper_air_temperature: f32,
-    pub water_vapor: f32,
+    pub air_temperature: f64,
+    pub upper_air_temperature: f64,
+    pub water_vapor: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CloudFieldTimeCoordinates {
-    pub cumulus: f32,
-    pub upper: f32,
+    pub cumulus: f64,
+    pub upper: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VectorFieldTimeCoordinates {
-    pub pressure: [f32; 4],
-    pub ocean_current: f32,
+    pub pressure: [f64; 4],
+    pub ocean_current: f64,
 }
 
 struct ScalarNoiseSample {
@@ -425,7 +425,7 @@ struct OceanQuery {
     match_seed: u64,
     world_tick: u64,
     world_tick_fraction: f32,
-    current_time_coordinate: f32,
+    current_time_coordinate: f64,
     position_m: Vector,
     celestial: CelestialConditions,
     weather: ProceduralWeather,
@@ -2087,10 +2087,11 @@ fn spatiotemporal_fractal_noise_sample(
     noise_field: u32,
     position_m: Vector,
     mut wavelength_m: f32,
-    mut time_coordinate: f32,
+    time_coordinate: f64,
     octave_count: usize,
     persistence: f32,
 ) -> (ScalarNoiseSample, f64) {
+    let mut time = NoiseTime::new(time_coordinate);
     let mut value = 0.0;
     let mut broad_value = 0.0;
     let mut gradient = Vector::ZERO;
@@ -2102,7 +2103,7 @@ fn spatiotemporal_fractal_noise_sample(
             noise_key(match_seed, noise_field, octave),
             position_m,
             wavelength_m,
-            time_coordinate,
+            time,
         );
         if octave == 0 {
             broad_value = octave_sample.0;
@@ -2112,7 +2113,7 @@ fn spatiotemporal_fractal_noise_sample(
         amplitude_sum += amplitude;
         amplitude *= persistence;
         wavelength_m *= 0.5;
-        time_coordinate *= 2.0;
+        time = time.scaled(2);
     }
     (
         ScalarNoiseSample {
@@ -2657,7 +2658,7 @@ fn regional_deck_cover(
 fn sample_surface_air_temperature_anomaly_c(
     world_geometry: WorldGeometry,
     match_seed: u64,
-    time_coordinate: f32,
+    time_coordinate: f64,
     position_m: Vector,
 ) -> TemperatureSample {
     let (noise, broad_noise) = procedural_weather_noise_sample(
@@ -3122,7 +3123,7 @@ fn procedural_weather_noise(
     match_seed: u64,
     position_m: Vector,
     parameters: WeatherNoiseParameters,
-    time: f32,
+    time: f64,
 ) -> [f64; 2] {
     let (sample, broad_value) = spatiotemporal_fractal_noise_sample(
         world_geometry,
@@ -3145,7 +3146,7 @@ fn procedural_weather_noise_sample(
     match_seed: u64,
     position_m: Vector,
     parameters: WeatherNoiseParameters,
-    time: f32,
+    time: f64,
 ) -> (ScalarNoiseSample, f64) {
     let (mut sample, broad_value) = spatiotemporal_fractal_noise_sample(
         world_geometry,
@@ -3311,7 +3312,7 @@ fn spatiotemporal_simplex_noise_4d(
     key: u32,
     position_m: Vector,
     wavelength_m: f32,
-    time_coordinate: f32,
+    time: NoiseTime,
 ) -> (f32, Vector) {
     let wrapped_x_m = field_wrapped_x_m(world_geometry, position_m.x);
     // A key is itself a uniform hash, so its bits orient the slice.
@@ -3329,9 +3330,9 @@ fn spatiotemporal_simplex_noise_4d(
         circle_radius * cos_longitude,
         circle_radius * sin_longitude,
         latitude_sign * position_m.y / wavelength_m + latitude_offset,
-        time_coordinate + time_offset,
+        time_offset,
     ];
-    let (value, input_gradient) = spatiotemporal_simplex_noise_sample_4d(key, point);
+    let (value, input_gradient) = spatiotemporal_simplex_noise_sample_4d(key, point, time);
     (
         value,
         Vector::new(
@@ -3348,7 +3349,7 @@ fn spatiotemporal_pressure_noise_4d(
     position_m: Vector,
     zonal_wavelength_m: f32,
     meridional_wavelength_m: f32,
-    time_coordinate: f32,
+    time_coordinate: f64,
     zonal_aspect: f32,
     zonal_aspect_gradient_per_m: f32,
 ) -> (f32, Vector) {
@@ -3358,6 +3359,7 @@ fn spatiotemporal_pressure_noise_4d(
     let latitude_sign = if orientation & 0x100 == 0 { 1.0 } else { -1.0 };
     let latitude_offset = ((orientation >> 9) & 0xff) as f32 / 16.0;
     let time_offset = ((orientation >> 17) & 0x7fff) as f32 / 64.0;
+    let time = NoiseTime::new(time_coordinate);
     let longitude =
         std::f32::consts::TAU * wrapped_x_m / (world_geometry.width_m() as f32) + longitude_offset;
     let (sin_longitude, cos_longitude) = (libm::sinf(longitude), libm::cosf(longitude));
@@ -3368,9 +3370,9 @@ fn spatiotemporal_pressure_noise_4d(
         circle_radius * cos_longitude,
         circle_radius * sin_longitude,
         latitude_sign * position_m.y / meridional_wavelength_m + latitude_offset,
-        time_coordinate + time_offset,
+        time_offset,
     ];
-    let (value, input_gradient) = spatiotemporal_simplex_noise_sample_4d(key, point);
+    let (value, input_gradient) = spatiotemporal_simplex_noise_sample_4d(key, point, time);
     (
         value,
         Vector::new(
@@ -3385,29 +3387,74 @@ fn spatiotemporal_pressure_noise_4d(
 
 const SIMPLEX_4D_UNSKEW: f32 = 0.138_196_6;
 
-/// `simplex_noise_sample_4d` at `point`, whose last coordinate is time.
-/// `spatiotemporal_simplex_domain_4d` in noise.wgsl mirrors it.
-fn spatiotemporal_simplex_noise_sample_4d(key: u32, point: [f32; 4]) -> (f32, [f32; 4]) {
+/// A noise time coordinate as the 4D simplex lattice vertex of skewed index
+/// (a, a, a, b) nearest the point (0, 0, 0, coordinate), and that point's
+/// offset from it. The offsets stay below a unit however large the
+/// coordinate, which keeps evolving noise precise in f32 below the clock's
+/// 2^48-tick wrap; the lattice hash reads indices modulo 2^32, so wrapping
+/// them changes nothing.
+/// Noise.wgsl's `NoiseTime` mirrors it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NoiseTime {
+    pub lattice: [i32; 2],
+    /// The vertex's spatial coordinate, which every spatial coordinate drops.
+    pub space_shift: f32,
+    pub time: f32,
+}
+
+impl NoiseTime {
+    pub fn new(coordinate: f64) -> Self {
+        // Picks the vertex as `spatiotemporal_simplex_noise_sample_4d` does.
+        // f64 keeps the offsets within about 1e-5 for coordinates up to 1e11.
+        let b = libm::floor(1.309_017 * coordinate);
+        let a = libm::floor(0.236_068 * b);
+        let unskew = (3.0 * a + b) * f64::from(SIMPLEX_4D_UNSKEW);
+        Self {
+            lattice: [a as i64 as i32, b as i64 as i32],
+            space_shift: (a - unskew) as f32,
+            time: (coordinate - b + unskew) as f32,
+        }
+    }
+
+    /// The coordinate times `factor`, split the same way.
+    fn scaled(self, factor: i32) -> Self {
+        Self {
+            lattice: self.lattice.map(|index| index.wrapping_mul(factor)),
+            space_shift: self.space_shift * factor as f32,
+            time: self.time * factor as f32,
+        }
+    }
+}
+
+/// `simplex_noise_sample_4d` at `point` plus `time`; `point`'s last coordinate
+/// is a time offset. `spatiotemporal_simplex_domain_4d` in noise.wgsl mirrors
+/// it.
+fn spatiotemporal_simplex_noise_sample_4d(
+    key: u32,
+    point: [f32; 4],
+    time: NoiseTime,
+) -> (f32, [f32; 4]) {
     // Translating by a lattice vertex leaves the noise unchanged. The vertex of
     // skewed index (a, a, a, b), with a the floor of (√5 − 2)b, lies within a
     // unit along each axis of (0, 0, 0, (3 − √5)b), so b the floor of the time
-    // over 3 − √5 keeps every translated coordinate small. At a large time, f32
-    // would otherwise round each cell's origin by a different fraction of the
-    // time's ulp and step the noise's gradient at every cell face; the
-    // translation's own rounding is the same at every position.
+    // offset over 3 − √5 brings the offset below a unit, as `NoiseTime` brings
+    // the clock's time. Added to the whole offset, the clock's time would round
+    // to steps that a slowly evolving field takes several ticks to cross.
     let b = libm::floorf(1.309_017 * point[3]);
     let a = libm::floorf(0.236_068 * b);
     let unskew = (3.0 * a + b) * SIMPLEX_4D_UNSKEW;
-    let space_shift = a - unskew;
+    let space_shift = a - unskew + time.space_shift;
+    let [time_a, time_b] = time.lattice;
+    let a = time_a.wrapping_add(a as i32);
     simplex_noise_sample_4d(
         key,
         [
             point[0] - space_shift,
             point[1] - space_shift,
             point[2] - space_shift,
-            point[3] - b + unskew,
+            point[3] - b + unskew + time.time,
         ],
-        [a as i32, a as i32, a as i32, b as i32],
+        [a, a, a, time_b.wrapping_add(b as i32)],
     )
 }
 
@@ -3458,7 +3505,11 @@ fn simplex_noise_sample_4d(key: u32, point: [f32; 4], lattice_shift: [i32; 4]) -
         }
         let gradient = terrain_simplex_lattice_gradient_4d(
             key,
-            std::array::from_fn(|axis| lattice[axis] + offset_lattice[axis] + lattice_shift[axis]),
+            std::array::from_fn(|axis| {
+                lattice[axis]
+                    .wrapping_add(offset_lattice[axis])
+                    .wrapping_add(lattice_shift[axis])
+            }),
         );
         let ramp = (0..4)
             .map(|axis| gradient[axis] * offset[axis])
@@ -3919,20 +3970,12 @@ fn noise_time_coordinate_interpolated(
     tick_fraction: f32,
     evolution_speed_m_s: f32,
     wavelength_m: f32,
-) -> f32 {
-    const TIME_COORDINATE_PERIOD: f64 = 8192.0;
-    let coordinate_per_tick =
-        TICK_SECONDS * f64::from(evolution_speed_m_s) / f64::from(wavelength_m);
-    let mut coordinate = 0.0;
-    // Horner reduction incorporates the full tick without first rounding the
-    // absolute clock to floating point.
-    for shift in [48, 32, 16, 0] {
-        let chunk = ((tick >> shift) & 0xffff) as f64;
-        coordinate = (coordinate * 65_536.0 + chunk * coordinate_per_tick) % TIME_COORDINATE_PERIOD;
-    }
-    coordinate =
-        (coordinate + f64::from(tick_fraction) * coordinate_per_tick) % TIME_COORDINATE_PERIOD;
-    coordinate as f32
+) -> f64 {
+    // Compromise: the clock wraps every 2^48 ticks, some 150 000 years, so
+    // the tick stays exact in f64 and `NoiseTime`'s offsets stay precise.
+    let tick = tick % (1 << 48);
+    (tick as f64 + f64::from(tick_fraction)) * TICK_SECONDS * f64::from(evolution_speed_m_s)
+        / f64::from(wavelength_m)
 }
 
 fn land_sheltered_wind(

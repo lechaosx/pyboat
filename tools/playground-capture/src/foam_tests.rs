@@ -337,12 +337,13 @@ fn foam_reflects_its_whitecap_coverage_at_every_wind_tier_and_zoom() {
     let mut failures = Vec::new();
     // Views, the frames that average out their events, the seas, and the
     // standard error each mean is held to as a share of it: the closest
-    // view holds a few events a frame, so it is held to a fifth, and only
-    // in the strongest wind, whose foam fills it often. Rare large rows
-    // carry much of a wide view's foam, so a few frames mostly fall short
-    // of the mean and now and then far exceed it; wide views average many.
+    // view holds a few heavy-tailed events a frame, so it averages the most
+    // frames, is held to a fifth, and only in the strongest wind, whose foam
+    // fills it often. Rare large rows carry much of a wide view's foam, so a
+    // few frames mostly fall short of the mean and now and then far exceed
+    // it; wide views average many.
     let views: [(f32, u32, &[usize], f64); 5] = [
-        (15.0, 96, &[2], 0.2),
+        (15.0, 768, &[2], 0.2),
         (240.0, 36, &[0, 1, 2], 0.1),
         (1000.0, 48, &[0, 1, 2], 0.1),
         (2500.0, 48, &[0, 1, 2], 0.1),

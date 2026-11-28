@@ -4,20 +4,22 @@ struct SceneUniforms {
     // depth's near-plane scale (`DroneCamera::terrain_depth_near_scale`).
     drone_camera: vec4<f32>,
     // Air temperature's, upper air temperature's and water vapour's noise
-    // time, then padding.
-    scalar_field_time_coordinates: vec4<f32>,
+    // times.
+    scalar_field_noise_times: array<vec4<u32>, 3>,
     match_seed: vec2<u32>,
     world_size_m: vec2<f32>,
     inverse_world_size_m: vec2<f32>,
     css_view_height_px_and_padding: vec2<f32>,
     world_phases_and_pixel_footprint_m: vec4<f32>,
-    pressure_time_coordinate: vec4<f32>,
-    ocean_current_time_coordinate_and_padding: vec4<f32>,
+    pressure_noise_times: array<vec4<u32>, 4>,
+    ocean_current_noise_time: vec4<u32>,
     seasonal_phase_factors: vec4<f32>,
     celestial_orbit_angles: vec4<f32>,
     celestial_orbit_light: vec4<f32>,
     view_cloud_motion_m: vec4<f32>,
-    cloud_time_coordinates: vec4<f32>,
+    // Cumulus's, the deck's and cirrus's noise times for their first three
+    // octaves (`cloud_noise_time_uniforms` in crates/browser/src/lib.rs).
+    cloud_noise_times: array<array<vec4<u32>, 3>, 3>,
     // Seconds the adapting field adapts over this frame, the output peak, 1
     // for HDR output, then the vision noise phase.
     exposure_and_output: vec4<f32>,

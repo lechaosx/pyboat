@@ -44,12 +44,12 @@ use crate::{
     OCCLUDER_FIELD_TEXELS, OCEAN_WAVE_BAND_ROTATION_ROWS, ResolutionController, SCENE_SHADER,
     SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT, TerrainCache, TerrainCachePass, TerrainDepth,
     UpscaleTargets, Upscaler, ViewCloudMotion, WaveTiles, append_reliable_server_message_chunk,
-    baked_surface_sizes, bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot,
-    field_grids, gameplay_view_height_m, ocean_wave_uniforms, queue_latest_snapshot,
-    requeue_failed_viewport, sample_view_cloud_state, sample_world_geometry, scale_bar,
-    scene_render_size, seasonal_phase_factors, surface_height_texture, view_width_m,
-    viewport_interest_radius_m, visual_pixel_footprint_m, wave_tile_uniforms,
-    webtransport_server_url, zoom_view_height_m,
+    baked_surface_sizes, bounded_canvas_dimensions, cloud_noise_time_uniforms,
+    disconnect_and_clear_pending_snapshot, field_grids, gameplay_view_height_m, noise_time_uniform,
+    ocean_wave_uniforms, queue_latest_snapshot, requeue_failed_viewport, sample_view_cloud_state,
+    sample_world_geometry, scale_bar, scene_render_size, seasonal_phase_factors,
+    surface_height_texture, view_width_m, viewport_interest_radius_m, visual_pixel_footprint_m,
+    wave_tile_uniforms, webtransport_server_url, zoom_view_height_m,
 };
 #[cfg(any(game_draws_foam, feature = "playground"))]
 use crate::{FoamDrift, FoamView, foam_uniforms, view_strongest_wind_m_s, view_surface_drift_m_s};
@@ -1057,12 +1057,12 @@ pub fn playground_scene_uniforms(
     let uniforms = SceneUniforms {
         camera_and_view_m: [camera_x_m, camera_y_m, view_size_m[0], view_size_m[1]],
         drone_camera: camera.scene_uniform_row(),
-        scalar_field_time_coordinates: [
+        scalar_field_noise_times: [
             scalar_time.air_temperature,
             scalar_time.upper_air_temperature,
             scalar_time.water_vapor,
-            0.0,
-        ],
+        ]
+        .map(noise_time_uniform),
         match_seed: [match_seed as u32, (match_seed >> 32) as u32],
         world_size_m: [world_width_m, world_height_m],
         inverse_world_size_m: [world_width_m.recip(), world_height_m.recip()],
@@ -1073,8 +1073,8 @@ pub fn playground_scene_uniforms(
             celestial.lunar_longitude_phase,
             pixel_footprint_m,
         ],
-        pressure_time_coordinate: vector_time.pressure,
-        ocean_current_time_coordinate_and_padding: [vector_time.ocean_current, 0.0, 0.0, 0.0],
+        pressure_noise_times: vector_time.pressure.map(noise_time_uniform),
+        ocean_current_noise_time: noise_time_uniform(vector_time.ocean_current),
         seasonal_phase_factors: seasonal_phase_factors(celestial.season_phase),
         celestial_orbit_angles: [
             orbit.solar_declination_rad as f32,
@@ -1089,7 +1089,7 @@ pub fn playground_scene_uniforms(
             0.0,
         ],
         view_cloud_motion_m,
-        cloud_time_coordinates: [cloud_time.cumulus, cloud_time.upper, 0.0, 0.0],
+        cloud_noise_times: cloud_noise_time_uniforms(cloud_time),
         exposure_and_output: row(exposure_and_output)?,
         lightning_sources: crate::lightning_sources(
             geometry,
@@ -1213,19 +1213,19 @@ struct SceneVertex {
 struct SceneUniforms {
     camera_and_view_m: [f32; 4],
     drone_camera: [f32; 4],
-    scalar_field_time_coordinates: [f32; 4],
+    scalar_field_noise_times: [[u32; 4]; 3],
     match_seed: [u32; 2],
     world_size_m: [f32; 2],
     inverse_world_size_m: [f32; 2],
     css_view_height_px_and_padding: [f32; 2],
     world_phases_and_pixel_footprint_m: [f32; 4],
-    pressure_time_coordinate: [f32; 4],
-    ocean_current_time_coordinate_and_padding: [f32; 4],
+    pressure_noise_times: [[u32; 4]; 4],
+    ocean_current_noise_time: [u32; 4],
     seasonal_phase_factors: [f32; 4],
     celestial_orbit_angles: [f32; 4],
     celestial_orbit_light: [f32; 4],
     view_cloud_motion_m: [f32; 4],
-    cloud_time_coordinates: [f32; 4],
+    cloud_noise_times: [[[u32; 4]; 3]; 3],
     exposure_and_output: [f32; 4],
     lightning_sources: [[f32; 4]; 4],
     environment_field_grid_m: [f32; 4],
@@ -2505,12 +2505,12 @@ impl Renderer {
                     view_height_m,
                 ],
                 drone_camera: camera.scene_uniform_row(),
-                scalar_field_time_coordinates: [
+                scalar_field_noise_times: [
                     scalar_time.air_temperature,
                     scalar_time.upper_air_temperature,
                     scalar_time.water_vapor,
-                    0.0,
-                ],
+                ]
+                .map(noise_time_uniform),
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
                 world_size_m: [
                     world_geometry.width_m() as f32,
@@ -2527,13 +2527,8 @@ impl Renderer {
                     celestial.lunar_longitude_phase,
                     pixel_footprint_m,
                 ],
-                pressure_time_coordinate: vector_time.pressure,
-                ocean_current_time_coordinate_and_padding: [
-                    vector_time.ocean_current,
-                    0.0,
-                    0.0,
-                    0.0,
-                ],
+                pressure_noise_times: vector_time.pressure.map(noise_time_uniform),
+                ocean_current_noise_time: noise_time_uniform(vector_time.ocean_current),
                 seasonal_phase_factors: seasonal_phase_factors(celestial.season_phase),
                 celestial_orbit_angles: [
                     orbit.solar_declination_rad as f32,
@@ -2548,7 +2543,7 @@ impl Renderer {
                     0.0,
                 ],
                 view_cloud_motion_m,
-                cloud_time_coordinates: [cloud_time.cumulus, cloud_time.upper, 0.0, 0.0],
+                cloud_noise_times: cloud_noise_time_uniforms(cloud_time),
                 // WebGPU exposes HDR capability but no numeric display headroom.
                 exposure_and_output: [
                     self.adaptation_clock.seconds(),

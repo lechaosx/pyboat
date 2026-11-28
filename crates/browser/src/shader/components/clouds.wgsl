@@ -69,9 +69,6 @@ const CIRRUS_TRANSPORT_RATIO: f32 = 1.5;
 // Spread of one spatiotemporal octave's value; with a fractal's spread ratio
 // this sets the logistic scale that makes its latent rank about uniform.
 const CLOUD_OCTAVE_RANK_SCALE: f32 = 0.1786;
-// Turbulent eddies turn over in a time that grows with their size to the 2/3
-// power, so each halving of the wavelength evolves 2^(2/3) times faster.
-const CLOUD_OCTAVE_TIME_RATIO: f32 = 1.5874;
 // Root-mean-square slope of one spatiotemporal octave across the ground, per
 // unit of its domain: 1.456 along each domain axis over 400 000 uniform points.
 const CLOUD_OCTAVE_SLOPE: f32 = 2.06;
@@ -87,12 +84,13 @@ struct CloudLatent {
 
 // Octaves fade from full weight at twice `shortest_m` to none at it. The loop
 // stops at `loop_shortest_m`, which forced evaluation lowers to the shortest
-// wavelength any weather can keep.
+// wavelength any weather can keep. `times` are the first three octaves' noise
+// times; octaves three apart evolve exactly four times apart.
 fn band_limited_cloud_latent(
     field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
-    initial_time_coordinate: f32,
+    times: array<vec4<u32>, 3>,
     persistence: f32,
     shortest_m: f32,
     loop_shortest_m: f32,
@@ -104,7 +102,7 @@ fn band_limited_cloud_latent(
     var squared_sum = 0.0;
     var squared_slope_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
-    var time_coordinate = initial_time_coordinate;
+    var phases = times;
     for (var octave = 0u; octave < 9u; octave++) {
         if wavelength_m <= loop_shortest_m {
             break;
@@ -114,7 +112,7 @@ fn band_limited_cloud_latent(
             noise_key(field, octave),
             position_m,
             wavelength_m,
-            time_coordinate,
+            scaled_noise_time(noise_time(phases[octave % 3u]), 1i << (2u * (octave / 3u))),
         );
         value += octave_amplitude * sample.value;
         gradient += octave_amplitude * sample.gradient;
@@ -123,7 +121,6 @@ fn band_limited_cloud_latent(
         squared_slope_sum += octave_amplitude * octave_amplitude / (wavelength_m * wavelength_m);
         amplitude *= persistence;
         wavelength_m *= 0.5;
-        time_coordinate *= CLOUD_OCTAVE_TIME_RATIO;
     }
     let normalization = max(amplitude_sum, 1e-6);
     return CloudLatent(
@@ -411,7 +408,7 @@ fn cumulus_shadow(
         CUMULUS_NOISE_FIELD,
         ray.position_m - scene.view_cloud_motion_m.xy,
         CUMULUS_WAVELENGTH_M,
-        scene.cloud_time_coordinates.x,
+        scene.cloud_noise_times[0],
         0.58,
         shortest_m,
         select(
@@ -488,7 +485,7 @@ fn deck_transmittance(rays: CloudShadowRays, deck: vec4<f32>, grid_shortest_m: f
         DECK_NOISE_FIELD,
         ray.position_m - scene.view_cloud_motion_m.zw,
         DECK_WAVELENGTH_M,
-        scene.cloud_time_coordinates.y,
+        scene.cloud_noise_times[1],
         0.5,
         shortest_m,
         shortest_m,
@@ -525,7 +522,7 @@ fn cirrus_transmittance(rays: CloudShadowRays, deck: vec4<f32>, grid_shortest_m:
         CIRRUS_NOISE_FIELD,
         ray.position_m - CIRRUS_TRANSPORT_RATIO * scene.view_cloud_motion_m.zw,
         CIRRUS_WAVELENGTH_M,
-        0.5 * scene.cloud_time_coordinates.y,
+        scene.cloud_noise_times[2],
         0.62,
         shortest_m,
         shortest_m,

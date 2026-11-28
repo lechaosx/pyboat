@@ -326,6 +326,58 @@ fn surface_wind_convergence_changes_smoothly_along_a_line() {
     }
 }
 
+/// Weather changes over one tick by about its usual amount however late the
+/// clock, including at ticks where several fields' noise times have grown
+/// past 2^13.
+#[test]
+fn weather_changes_by_its_usual_amount_over_each_late_tick() {
+    let world = WorldGeometry::default();
+    let positions: Vec<Vector> = (0..200)
+        .map(|index| {
+            Vector::new(
+                (index % 20) as f32 * 3_100.0 - 30_000.0,
+                (index / 20) as f32 * 4_300.0 - 20_000.0,
+            )
+        })
+        .collect();
+    for centre in [20_971_520_u64, 78_643_200, 671_088_640] {
+        let primaries = |tick| {
+            positions
+                .iter()
+                .map(|&position| procedural_atmosphere_primary(world, SEED, tick, position))
+                .collect::<Vec<_>>()
+        };
+        // Mean changes over each tick of the gust signal, the pressure
+        // gradient and water vapour.
+        let mut changes = Vec::new();
+        let mut previous = primaries(centre - 8);
+        for tick in centre - 7..=centre + 8 {
+            let current = primaries(tick);
+            let mut change = [0.0_f32; 3];
+            for (before, after) in previous.iter().zip(&current) {
+                change[0] += (after.surface_gust_signal - before.surface_gust_signal).abs();
+                change[1] += (after.pressure_gradient_hpa_per_m
+                    - before.pressure_gradient_hpa_per_m)
+                    .length();
+                change[2] += (after.water_vapor_g_kg - before.water_vapor_g_kg).abs();
+            }
+            changes.push(change);
+            previous = current;
+        }
+        for field in 0..3 {
+            let mut field_changes: Vec<f32> = changes.iter().map(|change| change[field]).collect();
+            field_changes.sort_by(f32::total_cmp);
+            let median = field_changes[field_changes.len() / 2];
+            let largest = field_changes[field_changes.len() - 1];
+            // Over sixteen ticks a smooth field's rate of change barely varies.
+            assert!(
+                largest <= 2.0 * median,
+                "field {field} near tick {centre}: a {largest} change against a median {median}",
+            );
+        }
+    }
+}
+
 #[test]
 fn evolving_weather_fields_advance_over_an_hour_at_huge_ticks_without_offsets() {
     let world = geometry();

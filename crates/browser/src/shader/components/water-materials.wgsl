@@ -40,7 +40,7 @@ fn ocean_current_m_s_from_surface(
         OCEAN_CURRENT_NOISE_FIELD,
         position_m,
         0.25 * scene.world_size_m.x,
-        scene.ocean_current_time_coordinate_and_padding.x,
+        noise_time(scene.ocean_current_noise_time),
         3u,
         0.5,
     );

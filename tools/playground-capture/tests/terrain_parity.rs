@@ -502,52 +502,58 @@ fn rendered_relative_humidity_matches_authoritative_rust() {
     );
 }
 
+/// Also from a clock some 2400 years on, where the fastest weather field's
+/// noise-time lattice indices have wrapped past the i32 range.
 #[test]
 fn rendered_low_cloud_and_rain_match_authoritative_rust() {
     let world = WorldGeometry::default();
-    let (mut compared_cover, mut compared_rain) = (0, 0);
-    for index in 0..4096 {
-        if compared_cover >= 6 && compared_rain >= 6 {
-            break;
-        }
-        let position_m = Vector::new(
-            (index % 32) as f32 * 1_900.0 - 30_000.0,
-            (index / 32 % 32) as f32 * 1_950.0 - 31_000.0,
-        );
-        let world_time_seconds = (index / 1024) as f64 * 21_600.0;
-        let tick = (world_time_seconds * TICKS_PER_SECOND as f64) as u64;
-        let weather = procedural_world_environment(world, SEED, tick, position_m).weather;
-        for (diagnostic, expected, compared) in [
-            (
-                "weather_low_coverage",
-                weather.cloudiness,
-                &mut compared_cover,
-            ),
-            ("weather_rain", weather.rain_intensity, &mut compared_rain),
-        ] {
-            // Partial values show the whole scheme; saturated ones hide it.
-            if !(0.05..=0.95).contains(&expected) || *compared >= 6 {
-                continue;
+    for start_seconds in [0.0, 7.5e10] {
+        let (mut compared_cover, mut compared_rain) = (0, 0);
+        for index in 0..4096 {
+            if compared_cover >= 6 && compared_rain >= 6 {
+                break;
             }
-            let actual = scalar_debug_amount(&render_diagnostic_image_at(
-                world,
-                position_m,
-                world_time_seconds,
-                diagnostic,
-                1,
-                1,
-            ));
-            assert!(
-                (actual - expected).abs() < 0.05,
-                "{diagnostic} at {position_m:?}: rendered {actual}, Rust {expected}",
+            let position_m = Vector::new(
+                (index % 32) as f32 * 1_900.0 - 30_000.0,
+                (index / 32 % 32) as f32 * 1_950.0 - 31_000.0,
             );
-            *compared += 1;
+            let world_time_seconds = start_seconds + (index / 1024) as f64 * 21_600.0;
+            let tick = (world_time_seconds * TICKS_PER_SECOND as f64) as u64;
+            let weather = procedural_world_environment(world, SEED, tick, position_m).weather;
+            for (diagnostic, expected, compared) in [
+                (
+                    "weather_low_coverage",
+                    weather.cloudiness,
+                    &mut compared_cover,
+                ),
+                ("weather_rain", weather.rain_intensity, &mut compared_rain),
+            ] {
+                // Partial values show the whole scheme; saturated ones hide it.
+                if !(0.05..=0.95).contains(&expected) || *compared >= 6 {
+                    continue;
+                }
+                let actual = scalar_debug_amount(&render_diagnostic_image_at(
+                    world,
+                    position_m,
+                    world_time_seconds,
+                    diagnostic,
+                    1,
+                    1,
+                ));
+                assert!(
+                    (actual - expected).abs() < 0.05,
+                    "{diagnostic} at {position_m:?}, {world_time_seconds} s: rendered {actual}, \
+                     Rust {expected}",
+                );
+                *compared += 1;
+            }
         }
+        assert!(
+            compared_cover >= 6 && compared_rain >= 6,
+            "from {start_seconds} s, only {compared_cover} partial cover and {compared_rain} \
+             partial rain positions",
+        );
     }
-    assert!(
-        compared_cover >= 6 && compared_rain >= 6,
-        "only {compared_cover} partial cover and {compared_rain} partial rain positions",
-    );
 }
 
 #[test]

@@ -343,17 +343,39 @@ fn simplex_noise_domain_4d(point: vec4<f32>) -> Simplex4dDomain {
     return Simplex4dDomain(lattice_products, first, rank);
 }
 
-// The domain of a point whose last coordinate is time. Mirrors
-// `spatiotemporal_simplex_noise_sample_4d` in crates/game/src/lib.rs, which
-// records why it translates the lattice.
-fn spatiotemporal_simplex_domain_4d(point: vec4<f32>) -> Simplex4dDomain {
+// Mirrors `NoiseTime` in crates/game/src/lib.rs, which records the split.
+struct NoiseTime {
+    lattice: vec2<i32>,
+    space_shift: f32,
+    time: f32,
+};
+
+// A uniform row of `noise_time_uniform` in crates/browser/src/lib.rs.
+fn noise_time(row: vec4<u32>) -> NoiseTime {
+    return NoiseTime(bitcast<vec2<i32>>(row.xy), bitcast<f32>(row.z), bitcast<f32>(row.w));
+}
+
+// The noise time times `factor`, split the same way.
+fn scaled_noise_time(time: NoiseTime, factor: i32) -> NoiseTime {
+    return NoiseTime(
+        time.lattice * factor,
+        time.space_shift * f32(factor),
+        time.time * f32(factor),
+    );
+}
+
+// The domain of `point` plus `time`, where `point`'s last coordinate is a time
+// offset. Mirrors `spatiotemporal_simplex_noise_sample_4d` in
+// crates/game/src/lib.rs, which records why it translates the lattice.
+fn spatiotemporal_simplex_domain_4d(point: vec4<f32>, time: NoiseTime) -> Simplex4dDomain {
     let b = floor(1.309017 * point.w);
     let a = floor(0.236068 * b);
     let unskew = (3.0 * a + b) * 0.1381966;
-    var domain = simplex_noise_domain_4d(
-        vec4<f32>(point.xyz - vec3<f32>(a - unskew), point.w - b + unskew),
-    );
-    let lattice_shift = vec4<i32>(i32(a), i32(a), i32(a), i32(b));
+    var domain = simplex_noise_domain_4d(vec4<f32>(
+        point.xyz - vec3<f32>(a - unskew + time.space_shift),
+        point.w - b + unskew + time.time,
+    ));
+    let lattice_shift = vec4<i32>(i32(a), i32(a), i32(a), i32(b)) + time.lattice.xxxy;
     for (var axis = 0u; axis < 4u; axis++) {
         domain.lattice_products[axis] +=
             bitcast<u32>(lattice_shift[axis]) * LATTICE_KEY_MULTIPLIERS[axis];
@@ -678,7 +700,7 @@ fn spatiotemporal_fractal_sample(
     field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
-    initial_time_coordinate: f32,
+    initial_time: NoiseTime,
     octave_count: u32,
     persistence: f32,
 ) -> TerrainNoiseSample {
@@ -686,7 +708,7 @@ fn spatiotemporal_fractal_sample(
         field,
         position_m,
         initial_wavelength_m,
-        initial_time_coordinate,
+        initial_time,
         octave_count,
         persistence,
     ).total;
@@ -696,7 +718,7 @@ fn spatiotemporal_fractal_sample_with_broad(
     field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
-    initial_time_coordinate: f32,
+    initial_time: NoiseTime,
     octave_count: u32,
     persistence: f32,
 ) -> FractalNoiseSample {
@@ -705,14 +727,14 @@ fn spatiotemporal_fractal_sample_with_broad(
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
-    var time_coordinate = initial_time_coordinate;
+    var time = initial_time;
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_key = noise_key(field, octave);
         let octave_sample = spatiotemporal_noise_sample(
             octave_key,
             position_m,
             wavelength_m,
-            time_coordinate,
+            time,
         );
         if octave == 0u { broad = octave_sample; }
         sample.value += amplitude * octave_sample.value;
@@ -720,7 +742,7 @@ fn spatiotemporal_fractal_sample_with_broad(
         amplitude_sum += amplitude;
         amplitude *= persistence;
         wavelength_m *= 0.5;
-        time_coordinate *= 2.0;
+        time = scaled_noise_time(time, 2);
     }
     sample.value /= amplitude_sum;
     sample.gradient /= amplitude_sum;
@@ -731,7 +753,7 @@ fn spatiotemporal_fractal_value(
     field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
-    initial_time_coordinate: f32,
+    initial_time: NoiseTime,
     octave_count: u32,
     persistence: f32,
 ) -> f32 {
@@ -739,7 +761,7 @@ fn spatiotemporal_fractal_value(
         field,
         position_m,
         initial_wavelength_m,
-        initial_time_coordinate,
+        initial_time,
         octave_count,
         persistence,
     ).x;
@@ -749,7 +771,7 @@ fn spatiotemporal_fractal_value_with_broad(
     field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
-    initial_time_coordinate: f32,
+    initial_time: NoiseTime,
     octave_count: u32,
     persistence: f32,
 ) -> vec2<f32> {
@@ -758,21 +780,21 @@ fn spatiotemporal_fractal_value_with_broad(
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
-    var time_coordinate = initial_time_coordinate;
+    var time = initial_time;
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_key = noise_key(field, octave);
         let octave_value = spatiotemporal_noise_value(
             octave_key,
             position_m,
             wavelength_m,
-            time_coordinate,
+            time,
         );
         if octave == 0u { broad = octave_value; }
         value += amplitude * octave_value;
         amplitude_sum += amplitude;
         amplitude *= persistence;
         wavelength_m *= 0.5;
-        time_coordinate *= 2.0;
+        time = scaled_noise_time(time, 2);
     }
     return vec2<f32>(value / amplitude_sum, broad);
 }
