@@ -893,6 +893,15 @@ fn moisture_increases_humidity_clouds_and_rain_without_overriding_the_result() {
 /// or converges (`forced` true), displacing it by the boundary layer's depth,
 /// holding `total_water_g_kg`.
 fn low_cloud_weather(forced: bool, total_water_g_kg: f32) -> game::ProceduralWeather {
+    low_cloud_weather_at(forced, total_water_g_kg, 20.0)
+}
+
+/// `low_cloud_weather` with surface air at `surface_air_temperature_c`.
+fn low_cloud_weather_at(
+    forced: bool,
+    total_water_g_kg: f32,
+    surface_air_temperature_c: f32,
+) -> game::ProceduralWeather {
     let primary = if forced {
         AtmospherePrimary {
             pressure_hpa: 985.0,
@@ -924,7 +933,7 @@ fn low_cloud_weather(forced: bool, total_water_g_kg: f32) -> game::ProceduralWea
             regional: Default::default(),
         }
     };
-    let weather = derive_weather_at_surface_temperature(primary, 20.0);
+    let weather = derive_weather_at_surface_temperature(primary, surface_air_temperature_c);
     assert!((weather.ascent_m - if forced { 1000.0 } else { -1000.0 }).abs() < 1.0);
     weather
 }
@@ -1287,6 +1296,27 @@ fn rain_needs_cloud_water_beyond_a_threshold_and_stays_under_the_cloud() {
         "rain began at {first_rain_g_kg} g/kg, below half cover at {half_g_kg}"
     );
     assert!(previous_rain > 0.5, "{previous_rain}");
+}
+
+/// Cloud just below freezing is mostly supercooled water, which ice replaces
+/// increasingly with cooling, so rain from air lifted across 0 °C changes no
+/// faster there than on either side.
+#[test]
+fn rain_from_air_lifted_across_freezing_changes_continuously() {
+    // Lifted 1000 ± 1 m at g/c_p = 9.8 K/km, surface air at 9.79–9.81 °C
+    // reaches freezing.
+    let rain = |surface_air_temperature_c| {
+        low_cloud_weather_at(true, 6.5, surface_air_temperature_c).rain_intensity
+    };
+    let [colder, below, above, warmer] = [9.65, 9.75, 9.85, 9.95].map(rain);
+    assert!(below > 0.0, "{below}");
+    let across = (above - below).abs();
+    let beside = (below - colder).abs().max((warmer - above).abs());
+
+    assert!(
+        across <= beside,
+        "rain {colder}, {below}, {above}, {warmer} changes by {across} across freezing"
+    );
 }
 
 #[test]

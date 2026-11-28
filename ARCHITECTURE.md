@@ -180,8 +180,12 @@ and verification details.
   Latitude, season, and local solar time provide the baseline; seeded fields
   supply anomalies. Derived values have no override path.
 - **[Implicit]** The primary moisture field is total water.
-- **[Implicit]** Saturation is over water at and above freezing and over ice
-  below, as in the observed humidity that calibrates total water.
+- **[Implicit]** Surface humidity's saturation is over water at and above
+  freezing and over ice below, as in the observed humidity that calibrates
+  total water.
+- **[Implicit]** Cloud is mixed-phase from freezing to well below it, with a
+  liquid share by temperature that weights its saturation and latent heat, so
+  cloud and rain vary continuously as air cools through freezing.
 - **[Implicit]** Total water scales with saturation at its air mass's
   temperature, without the daily cycle.
 - **[Explicit]** Total water's ratio to saturation has the mean and spread of

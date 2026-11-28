@@ -970,6 +970,7 @@ const DRY_ADIABATIC_LAPSE_RATE_C_PER_M: f32 = 0.0098;
 const DRY_AIR_SCALE_HEIGHT_M_PER_K: f32 = 29.26;
 const LATENT_WARMING_C_PER_G_KG: f32 = 2.49;
 const SUBLIMATION_WARMING_C_PER_G_KG: f32 = 2.82;
+const MIXED_PHASE_RANGE_C: f32 = 23.0;
 const BOUNDARY_LAYER_DEPTH_M: f32 = 1000.0;
 const CONDENSATION_LEVEL_M_PER_C: f32 = 125.0;
 const SURFACE_CRITICAL_RELATIVE_HUMIDITY: f32 = 0.96;
@@ -988,8 +989,32 @@ fn low_cloud(
 ) -> vec2<f32> {
     let parcel_temperature_c = surface_air_temperature_c
         - DRY_ADIABATIC_LAPSE_RATE_C_PER_M * lifted_m;
-    let saturation_g_kg = water_vapor_saturation_capacity_g_kg(
+    let mixed_phase_ramp = clamp(1.0 + parcel_temperature_c / MIXED_PHASE_RANGE_C, 0.0, 1.0);
+    let liquid_share = mixed_phase_ramp * mixed_phase_ramp;
+    let liquid_share_growth_per_c = select(
+        0.0,
+        2.0 * mixed_phase_ramp / MIXED_PHASE_RANGE_C,
+        mixed_phase_ramp < 1.0,
+    );
+    let water_saturation_hpa = magnus_vapor_pressure_hpa(
+        WATER_MAGNUS_COEFFICIENTS,
         parcel_temperature_c,
+    );
+    let ice_saturation_hpa = magnus_vapor_pressure_hpa(
+        ICE_MAGNUS_COEFFICIENTS,
+        parcel_temperature_c,
+    );
+    let saturation_hpa = liquid_share * water_saturation_hpa
+        + (1.0 - liquid_share) * ice_saturation_hpa;
+    let mixed_saturation_growth_per_c = (
+        liquid_share * water_saturation_hpa
+            * magnus_growth_per_c(WATER_MAGNUS_COEFFICIENTS, parcel_temperature_c)
+        + (1.0 - liquid_share) * ice_saturation_hpa
+            * magnus_growth_per_c(ICE_MAGNUS_COEFFICIENTS, parcel_temperature_c)
+        + liquid_share_growth_per_c * (water_saturation_hpa - ice_saturation_hpa)
+    ) / saturation_hpa;
+    let saturation_g_kg = specific_humidity_g_kg(
+        saturation_hpa,
         pressure_at_height_hpa(
             lifted_m,
             0.5 * (surface_air_temperature_c + parcel_temperature_c),
@@ -1014,15 +1039,10 @@ fn low_cloud(
         cover = 0.5 * rise * rise;
         condensate_per_spread = rise * rise * rise / 6.0;
     }
-    let latent_warming_c_per_g_kg = select(
-        SUBLIMATION_WARMING_C_PER_G_KG,
-        LATENT_WARMING_C_PER_G_KG,
-        parcel_temperature_c >= 0.0,
-    );
+    let latent_warming_c_per_g_kg = liquid_share * LATENT_WARMING_C_PER_G_KG
+        + (1.0 - liquid_share) * SUBLIMATION_WARMING_C_PER_G_KG;
     let latent_heating_factor = 1.0 / (
-        1.0 + latent_warming_c_per_g_kg
-            * saturation_growth_per_c(parcel_temperature_c)
-            * saturation_g_kg
+        1.0 + latent_warming_c_per_g_kg * mixed_saturation_growth_per_c * saturation_g_kg
     );
     let cloud_water_g_kg = latent_heating_factor * spread_g_kg * condensate_per_spread;
     let bergeron_factor = 1.0 + BERGERON_GAIN_PER_SQRT_C * sqrt(

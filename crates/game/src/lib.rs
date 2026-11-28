@@ -1333,9 +1333,7 @@ fn water_freezing_potential(effective_water_temperature_c: f32) -> f32 {
 /// and above freezing and over ice below, within 0.3% of Murphy and Koop's
 /// (2005, Q. J. R. Meteorol. Soc. 131) reference from −40 to 40 °C. MERRA-2's
 /// surface relative humidity, which calibrates total water, takes the same
-/// phases. Compromise: cloud below freezing condenses at ice saturation,
-/// standing in for the supercooled water mixed with ice down to about −23 °C,
-/// whose saturation ECMWF's IFS blends between the two (up to 3.4% higher).
+/// phases; `low_cloud` blends the two in mixed-phase cloud.
 fn saturation_vapor_pressure_coefficients(air_temperature_c: f32) -> (f32, f32, f32) {
     if air_temperature_c >= 0.0 {
         WATER_MAGNUS_COEFFICIENTS
@@ -1374,14 +1372,6 @@ fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32, pressure_hpa: f3
     )
 }
 
-/// Saturation's fractional growth per degree, d ln e_s / dT.
-fn saturation_growth_per_c(air_temperature_c: f32) -> f32 {
-    magnus_growth_per_c(
-        saturation_vapor_pressure_coefficients(air_temperature_c),
-        air_temperature_c,
-    )
-}
-
 /// The temperature at which air holding `relative_humidity` of saturation
 /// saturates, inverting the Magnus form (Lawrence 2005, Bull. Am. Meteorol.
 /// Soc. 86).
@@ -1413,10 +1403,16 @@ const DRY_ADIABATIC_LAPSE_RATE_C_PER_M: f32 = 0.0098;
 // height per kelvin of the column's mean temperature.
 const DRY_AIR_SCALE_HEIGHT_M_PER_K: f32 = 29.26;
 // Physical: L_v/c_p, 2.501 MJ/kg over 1004 J/(kg K), per g/kg of condensate,
-// and L_s/c_p, 2.834 MJ/kg, per g/kg deposited as ice below freezing, where
-// saturation is over ice.
+// and L_s/c_p, 2.834 MJ/kg, per g/kg deposited as ice.
 const LATENT_WARMING_C_PER_G_KG: f32 = 2.49;
 const SUBLIMATION_WARMING_C_PER_G_KG: f32 = 2.82;
+// Published: ECMWF's IFS takes cloud between freezing and 23 K below as mixed
+// phase, its liquid share ((T − T₀ + 23 K)/23 K)² weighting saturation over
+// water against ice and the latent heats of vaporization against sublimation
+// (IFS Documentation Cy47r3, Part IV, eqs. 12.12–12.14). Compromise: a share
+// set by temperature alone, standing in for the ice that nucleation and the
+// Bergeron–Findeisen process grow over the cloud's life.
+const MIXED_PHASE_RANGE_C: f32 = 23.0;
 // Physical, published: the boundary layer's depth, through which unresolved
 // ascent lifts surface air and over which friction acts on the surface wind.
 // Garratt (1994, Earth-Sci. Rev. 37) puts the capping inversion of a convective
@@ -1484,8 +1480,29 @@ struct LowCloud {
 fn low_cloud(total_water_g_kg: f32, surface_air_temperature_c: f32, lifted_m: f32) -> LowCloud {
     let parcel_temperature_c =
         surface_air_temperature_c - DRY_ADIABATIC_LAPSE_RATE_C_PER_M * lifted_m;
-    let saturation_g_kg = water_vapor_saturation_capacity_g_kg(
-        parcel_temperature_c,
+    let mixed_phase_ramp = (1.0 + parcel_temperature_c / MIXED_PHASE_RANGE_C).clamp(0.0, 1.0);
+    let liquid_share = mixed_phase_ramp * mixed_phase_ramp;
+    let liquid_share_growth_per_c = if mixed_phase_ramp < 1.0 {
+        2.0 * mixed_phase_ramp / MIXED_PHASE_RANGE_C
+    } else {
+        0.0
+    };
+    let water_saturation_hpa =
+        magnus_vapor_pressure_hpa(WATER_MAGNUS_COEFFICIENTS, parcel_temperature_c);
+    let ice_saturation_hpa =
+        magnus_vapor_pressure_hpa(ICE_MAGNUS_COEFFICIENTS, parcel_temperature_c);
+    let saturation_hpa =
+        liquid_share * water_saturation_hpa + (1.0 - liquid_share) * ice_saturation_hpa;
+    let mixed_saturation_growth_per_c = (liquid_share
+        * water_saturation_hpa
+        * magnus_growth_per_c(WATER_MAGNUS_COEFFICIENTS, parcel_temperature_c)
+        + (1.0 - liquid_share)
+            * ice_saturation_hpa
+            * magnus_growth_per_c(ICE_MAGNUS_COEFFICIENTS, parcel_temperature_c)
+        + liquid_share_growth_per_c * (water_saturation_hpa - ice_saturation_hpa))
+        / saturation_hpa;
+    let saturation_g_kg = specific_humidity_g_kg(
+        saturation_hpa,
         pressure_at_height_hpa(
             lifted_m,
             0.5 * (surface_air_temperature_c + parcel_temperature_c),
@@ -1509,16 +1526,10 @@ fn low_cloud(total_water_g_kg: f32, surface_air_temperature_c: f32, lifted_m: f3
     };
     // Condensing warms the air and so raises its saturation, which keeps this
     // share of the excess as cloud water.
-    let latent_warming_c_per_g_kg = if parcel_temperature_c >= 0.0 {
-        LATENT_WARMING_C_PER_G_KG
-    } else {
-        SUBLIMATION_WARMING_C_PER_G_KG
-    };
-    let latent_heating_factor = 1.0
-        / (1.0
-            + latent_warming_c_per_g_kg
-                * saturation_growth_per_c(parcel_temperature_c)
-                * saturation_g_kg);
+    let latent_warming_c_per_g_kg = liquid_share * LATENT_WARMING_C_PER_G_KG
+        + (1.0 - liquid_share) * SUBLIMATION_WARMING_C_PER_G_KG;
+    let latent_heating_factor =
+        1.0 / (1.0 + latent_warming_c_per_g_kg * mixed_saturation_growth_per_c * saturation_g_kg);
     let cloud_water_g_kg = latent_heating_factor * spread_g_kg * condensate_per_spread;
     let bergeron_factor = 1.0
         + BERGERON_GAIN_PER_SQRT_C
